@@ -4,7 +4,7 @@ import warnings
 from logging import Filter, LogRecord
 from typing import Any, Callable, Coroutine, Literal, Optional, Type, TypeVar
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, APIRouter
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from aidial_sdk._errors import (
@@ -116,41 +116,19 @@ class DIALApp(FastAPI):
         return self
 
     def add_chat_completion(
-        self, deployment_name: str, impl: ChatCompletion
+        self, impl: ChatCompletion
     ) -> "DIALApp":
 
-        self.add_api_route(
-            f"/openai/deployments/{deployment_name}/chat/completions",
-            self._chat_completion(deployment_name, impl),
-            methods=["POST"],
-        )
+        router = APIRouter()
 
-        self.add_api_route(
-            f"/openai/deployments/{deployment_name}/rate",
-            self._rate_response(deployment_name, impl),
-            methods=["POST"],
-        )
 
-        if endpoint_impl := get_method_implementation(impl, "tokenize"):
-            self.add_api_route(
-                f"/openai/deployments/{deployment_name}/tokenize",
-                self._endpoint_factory(
-                    deployment_name, endpoint_impl, "tokenize", TokenizeRequest
-                ),
-                methods=["POST"],
-            )
+        router.add_api_route('/openai/deployments/{deployment_id:str}/chat/completions',
+                             endpoint=self._chat_completion(impl), methods=["POST"])
 
-        if endpoint_impl := get_method_implementation(impl, "truncate_prompt"):
-            self.add_api_route(
-                f"/openai/deployments/{deployment_name}/truncate_prompt",
-                self._endpoint_factory(
-                    deployment_name,
-                    endpoint_impl,
-                    "truncate_prompt",
-                    TruncatePromptRequest,
-                ),
-                methods=["POST"],
-            )
+        router.add_api_route('/openai/deployments/{deployment_id:str}/rate',
+                             endpoint=self._rate_response(impl), methods=["POST"])
+
+        self.include_router(router)
 
         return self
 
@@ -175,8 +153,8 @@ class DIALApp(FastAPI):
 
         return _handler
 
-    def _rate_response(self, deployment_id: str, impl: ChatCompletion):
-        async def _handler(original_request: Request):
+    def _rate_response(self, impl: ChatCompletion):
+        async def _handler(deployment_id: str, original_request: Request):
             set_log_deployment(deployment_id)
 
             request = await RateRequest.from_request(
@@ -188,8 +166,8 @@ class DIALApp(FastAPI):
 
         return _handler
 
-    def _chat_completion(self, deployment_id: str, impl: ChatCompletion):
-        async def _handler(original_request: Request):
+    def _chat_completion(self, impl: ChatCompletion):
+        async def _handler(deployment_id: str, original_request: Request):
             set_log_deployment(deployment_id)
 
             request = await ChatCompletionRequest.from_request(
@@ -198,7 +176,7 @@ class DIALApp(FastAPI):
 
             response = ChatCompletionResponse(request)
             first_chunk = await response._generator(
-                impl.chat_completion, request
+                impl.chat_completion, request, deployment_id
             )
 
             if request.stream:

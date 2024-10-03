@@ -13,19 +13,19 @@ from aidial_sdk.deployment.truncate_prompt import (
 class ChatCompletion(ABC):
     @abstractmethod
     async def chat_completion(
-        self, request: Request, response: Response
+        self, request: Request, response: Response, deployment_id: str
     ) -> None:
         """Implement chat completion logic"""
 
-    async def rate_response(self, request: RateRequest) -> None:
+    async def rate_response(self, request: RateRequest, deployment_id: str) -> None:
         """Implement rate response logic"""
 
-    async def tokenize(self, request: TokenizeRequest) -> TokenizeResponse:
+    async def tokenize(self, request: TokenizeRequest, deployment_id: str) -> TokenizeResponse:
         """Implement tokenize logic"""
         raise NotImplementedError()
 
     async def truncate_prompt(
-        self, request: TruncatePromptRequest
+        self, request: TruncatePromptRequest, deployment_id: str
     ) -> TruncatePromptResponse:
         """Implement truncate prompt logic"""
         raise NotImplementedError()
