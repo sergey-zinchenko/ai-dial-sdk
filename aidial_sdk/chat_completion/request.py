@@ -205,6 +205,7 @@ class ChatCompletionRequest(AzureChatCompletionRequest):
     addons: Optional[List[Addon]] = None
     max_prompt_tokens: Optional[PositiveInt] = None
     custom_fields: Optional[ChatCompletionRequestCustomFields] = None
+    custom_application_properties: Optional[Dict[str, Any]] = None
 
 
 class Request(ChatCompletionRequest, FromRequestDeploymentMixin):
