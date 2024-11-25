@@ -16,6 +16,7 @@ from typing_extensions import assert_never
 
 from aidial_sdk.chat_completion.chunks import BaseChunkWithDefaults
 from aidial_sdk.exceptions import HTTPException as DIALException
+from aidial_sdk.utils._cancel_scope import CancelScope
 from aidial_sdk.utils.logging import log_debug
 from aidial_sdk.utils.merge_chunks import cleanup_indices, merge
 
@@ -136,31 +137,30 @@ async def add_heartbeat(
     heartbeat_object: Optional[_HeartbeatObject] = None,
     heartbeat_callback: Optional[_HeartbeatCallback] = None,
 ) -> AsyncGenerator[_T, None]:
-    chunk_task: Optional[asyncio.Task[_T]] = None
+    async with CancelScope() as cs:
+        chunk_task: Optional[asyncio.Task[_T]] = None
 
-    while True:
-        if chunk_task is None:
-            chunk_task = asyncio.create_task(stream.__anext__())
+        while True:
+            if chunk_task is None:
+                chunk_task = cs.create_task(stream.__anext__())
 
-        done = (
-            await asyncio.wait(
-                [chunk_task],
-                timeout=heartbeat_interval,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        )[0]
+            done = (
+                await asyncio.wait(
+                    [chunk_task],
+                    timeout=heartbeat_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            )[0]
 
-        if chunk_task in done:
-            try:
-                chunk, chunk_task = chunk_task.result(), None
-                yield chunk
-            except StopAsyncIteration:
-                break
-            except Exception as e:
-                raise e
-        else:
-            if heartbeat_object is not None:
-                yield await _eval_heartbeat_object(heartbeat_object)
+            if chunk_task in done:
+                try:
+                    chunk, chunk_task = chunk_task.result(), None
+                    yield chunk
+                except StopAsyncIteration:
+                    break
+            else:
+                if heartbeat_object is not None:
+                    yield await _eval_heartbeat_object(heartbeat_object)
 
-            if heartbeat_callback is not None:
-                await _call_heartbeat_callback(heartbeat_callback)
+                if heartbeat_callback is not None:
+                    await _call_heartbeat_callback(heartbeat_callback)

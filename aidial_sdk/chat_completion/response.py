@@ -22,10 +22,13 @@ from aidial_sdk.chat_completion.chunks import (
 from aidial_sdk.chat_completion.request import Request
 from aidial_sdk.exceptions import HTTPException as DIALException
 from aidial_sdk.exceptions import RequestValidationError, RuntimeServerError
+from aidial_sdk.utils._cancel_scope import CancelScope
 from aidial_sdk.utils.errors import RUNTIME_ERROR_MESSAGE, runtime_error
 from aidial_sdk.utils.logging import log_error, log_exception
 from aidial_sdk.utils.merge_chunks import merge
 from aidial_sdk.utils.streaming import ResponseStream
+
+_Producer = Callable[[Request, "Response"], Coroutine[Any, Any, Any]]
 
 
 class Response:
@@ -68,49 +71,38 @@ class Response:
     def stream(self) -> int:
         return self.request.stream
 
-    async def _generate_stream(
-        self,
-        producer: Callable[[Request, "Response"], Coroutine[Any, Any, Any]],
-    ) -> ResponseStream:
+    async def _run_producer(self, producer: _Producer):
+        try:
+            await producer(self.request, self)
+        except Exception as e:
+            if isinstance(e, DIALException):
+                dial_exception = e
+            else:
+                log_exception(RUNTIME_ERROR_MESSAGE)
+                dial_exception = RuntimeServerError(RUNTIME_ERROR_MESSAGE)
 
-        def _create_chunk(chunk):
+            self._queue.put_nowait(ExceptionChunk(dial_exception))
+        else:
+            self._queue.put_nowait(EndChunk())
+
+    async def _generate_stream(self, producer: _Producer) -> ResponseStream:
+        async with CancelScope() as cs:
+            cs.create_task(self._run_producer(producer))
+
+            async for chunk in self._generate_chunk_stream():
+                yield chunk
+
+    async def _generate_chunk_stream(self) -> ResponseStream:
+        def _create_chunk(chunk: BaseChunk):
             return BaseChunkWithDefaults(
                 chunk=chunk, defaults=self._default_chunk
             )
-
-        user_task = asyncio.create_task(producer(self.request, self))
-        user_task_is_done = False
 
         # A list of chunks whose emitting is delayed up until the very last moment
         delayed_chunks: List[BaseChunk] = []
 
         while True:
-            get_chunk_task = asyncio.create_task(self._queue.get())
-            done = (
-                await asyncio.wait(
-                    [get_chunk_task, user_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-            )[0]
-
-            if user_task in done and not user_task_is_done:
-                user_task_is_done = True
-                try:
-                    user_task.result()
-                except Exception as e:
-                    if isinstance(e, DIALException):
-                        dial_exception = e
-                    else:
-                        log_exception(RUNTIME_ERROR_MESSAGE)
-                        dial_exception = RuntimeServerError(
-                            RUNTIME_ERROR_MESSAGE
-                        )
-
-                    self._queue.put_nowait(ExceptionChunk(dial_exception))
-                else:
-                    self._queue.put_nowait(EndChunk())
-
-            chunk = await get_chunk_task
+            chunk = await self._queue.get()
             self._queue.task_done()
 
             if isinstance(chunk, BaseChunk):
@@ -122,7 +114,11 @@ class Response:
 
                 is_top_level_chunk = isinstance(
                     chunk,
-                    (UsageChunk, UsagePerModelChunk, DiscardedMessagesChunk),
+                    (
+                        UsageChunk,
+                        UsagePerModelChunk,
+                        DiscardedMessagesChunk,
+                    ),
                 )
 
                 if is_last_end_choice_chunk or is_top_level_chunk:

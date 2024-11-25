@@ -89,15 +89,6 @@ exclude = [
 
 [tool.black]
 line-length = 80
-exclude = '''
-/(
-    \.git
-  | \.venv
-  | \.nox
-  | \.pytest_cache
-  | \.__pycache__
-)/
-'''
 
 [tool.isort]
 line_length = 80
